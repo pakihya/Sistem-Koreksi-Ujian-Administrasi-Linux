@@ -1,0 +1,74 @@
+{
+  "ujian": {
+    "nama": "Ujian Konfigurasi DNS Server",
+    "kode": "DNS-SRV",
+    "versi": "1.0",
+    "deskripsi": "Penilaian instalasi dan konfigurasi BIND9 DNS Server"
+  },
+  "soal": [
+    {
+      "nomor": 1,
+      "tipe": "paket_terinstall",
+      "deskripsi": "Paket bind9 sudah terinstall",
+      "paket": "bind9"
+    },
+    {
+      "nomor": 2,
+      "tipe": "paket_terinstall",
+      "deskripsi": "Paket bind9utils sudah terinstall",
+      "paket": "bind9utils"
+    },
+    {
+      "nomor": 3,
+      "tipe": "service_aktif",
+      "deskripsi": "Service bind9 sedang aktif/running",
+      "service": "bind9"
+    },
+    {
+      "nomor": 4,
+      "tipe": "service_enabled",
+      "deskripsi": "Service bind9 diaktifkan saat boot",
+      "service": "bind9"
+    },
+    {
+      "nomor": 5,
+      "tipe": "port_listen",
+      "deskripsi": "Port 53 (DNS) sedang terbuka",
+      "port": 53
+    },
+    {
+      "nomor": 6,
+      "tipe": "file_ada",
+      "deskripsi": "File konfigurasi named.conf.local ada",
+      "path": "/etc/bind/named.conf.local"
+    },
+    {
+      "nomor": 7,
+      "tipe": "isi_file",
+      "deskripsi": "named.conf.local sudah dikonfigurasi zone",
+      "path": "/etc/bind/named.conf.local",
+      "pola": "zone\\s+\"[^\"]+\""
+    },
+    {
+      "nomor": 8,
+      "tipe": "isi_file",
+      "deskripsi": "named.conf.options mengizinkan query dari lokal",
+      "path": "/etc/bind/named.conf.options",
+      "pola": "allow-query|allow-recursion"
+    },
+    {
+      "nomor": 9,
+      "tipe": "perintah",
+      "deskripsi": "named-checkconf tidak mengeluarkan error",
+      "perintah": "named-checkconf 2>&1; echo EXIT:$?",
+      "pola": "EXIT:0"
+    },
+    {
+      "nomor": 10,
+      "tipe": "perintah",
+      "deskripsi": "DNS lokal dapat meresolve hostname sendiri",
+      "perintah": "dig @127.0.0.1 $(hostname) +short 2>&1",
+      "pola": "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}"
+    }
+  ]
+}

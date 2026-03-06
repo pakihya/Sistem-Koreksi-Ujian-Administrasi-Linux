@@ -1,0 +1,71 @@
+{
+  "ujian": {
+    "nama": "Ujian Basic Linux Debian",
+    "kode": "BASIC-LNX",
+    "versi": "1.0",
+    "deskripsi": "Penilaian konfigurasi dasar sistem Linux Debian"
+  },
+  "soal": [
+    {
+      "nomor": 1,
+      "tipe": "hostname",
+      "deskripsi": "Hostname mesin sudah dikonfigurasi (bukan localhost)",
+      "pola": "^(?!localhost$)[a-zA-Z0-9\\-]+$"
+    },
+    {
+      "nomor": 2,
+      "tipe": "timezone",
+      "deskripsi": "Timezone diatur ke Asia/Jakarta",
+      "nilai_expected": "Asia/Jakarta"
+    },
+    {
+      "nomor": 3,
+      "tipe": "direktori_ada",
+      "deskripsi": "Direktori /data/siswa sudah dibuat",
+      "path": "/data/siswa"
+    },
+    {
+      "nomor": 4,
+      "tipe": "direktori_ada",
+      "deskripsi": "Direktori /backup sudah dibuat",
+      "path": "/backup"
+    },
+    {
+      "nomor": 5,
+      "tipe": "file_ada",
+      "deskripsi": "File /etc/motd sudah ada",
+      "path": "/etc/motd"
+    },
+    {
+      "nomor": 6,
+      "tipe": "isi_file",
+      "deskripsi": "File /etc/motd berisi nama sekolah",
+      "path": "/etc/motd",
+      "pola": "SMK|Sekolah|Makarya"
+    },
+    {
+      "nomor": 7,
+      "tipe": "paket_terinstall",
+      "deskripsi": "Paket curl sudah terinstall",
+      "paket": "curl"
+    },
+    {
+      "nomor": 8,
+      "tipe": "paket_terinstall",
+      "deskripsi": "Paket net-tools sudah terinstall",
+      "paket": "net-tools"
+    },
+    {
+      "nomor": 9,
+      "tipe": "service_aktif",
+      "deskripsi": "Service SSH (openssh-server) sedang aktif",
+      "service": "ssh"
+    },
+    {
+      "nomor": 10,
+      "tipe": "service_enabled",
+      "deskripsi": "Service SSH diaktifkan saat boot",
+      "service": "ssh"
+    }
+  ]
+}
