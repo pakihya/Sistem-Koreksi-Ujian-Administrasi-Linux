@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-skamalearn.py - Aplikasi Koreksi Ujian Administrasi Linux
-Siswa input nama & kelas, lalu pilih file ujian (.json) dari folder yang sama.
+skamalearn.py - Sistem Koreksi Ujian Administrasi Linux
+Alur: input nama+kelas -> pilih soal -> koreksi -> rekap -> server aktif -> Ctrl+C -> hapus hasil
 """
 
 import json
@@ -12,358 +12,443 @@ import subprocess
 import sys
 import datetime
 import glob
+import threading
+import signal
+import atexit
+import http.server
+import socketserver
 from pathlib import Path
 
-# === WARNA TERMINAL =============================================================
+FOLDER      = os.path.dirname(os.path.abspath(__file__))
+SERVER_PORT = 9876
+
+# ============================================================
+# WARNA
+# ============================================================
 class C:
-    RESET  = "\033[0m"
-    BOLD   = "\033[1m"
-    GREEN  = "\033[92m"
-    RED    = "\033[91m"
-    YELLOW = "\033[93m"
-    CYAN   = "\033[96m"
-    WHITE  = "\033[97m"
-    BLUE   = "\033[94m"
-    DIM    = "\033[2m"
-    MAGENTA= "\033[95m"
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    GREEN   = "\033[92m"
+    RED     = "\033[91m"
+    YELLOW  = "\033[93m"
+    CYAN    = "\033[96m"
+    WHITE   = "\033[97m"
+    BLUE    = "\033[94m"
+    MAGENTA = "\033[95m"
+    DIM     = "\033[2m"
 
-# === FUNGSI CETAK ===============================================================
+# ============================================================
+# CETAK
+# ============================================================
+def garis(char="=", lebar=62):
+    print(C.CYAN + (char * lebar) + C.RESET)
+
 def cetak_header_utama():
-    lebar = 60
-    print("\n" + C.CYAN + ("=" * lebar) + C.RESET)
-    print(C.BOLD + C.WHITE + "SKAMALEARN - SISTEM KOREKSI UJIAN".center(lebar) + C.RESET)
-    print(C.CYAN + ("=" * lebar) + C.RESET)
-    print(C.DIM + "  Administrasi Linux Debian - SMK".center(lebar) + C.RESET)
-    print(C.CYAN + ("-" * lebar) + C.RESET + "\n")
+    print()
+    garis("=")
+    print(C.BOLD + C.WHITE + "  SKAMALEARN - SISTEM KOREKSI UJIAN".center(62) + C.RESET)
+    print(C.DIM   + "  Administrasi Linux -- NDS Lab".center(62) + C.RESET)
+    garis("=")
+    print()
 
-def cetak_header_ujian(ujian_info, nama_siswa, kelas_siswa):
-    lebar = 60
-    print("\n" + C.CYAN + ("=" * lebar) + C.RESET)
-    print(C.BOLD + C.WHITE + "MULAI KOREKSI".center(lebar) + C.RESET)
-    print(C.CYAN + ("=" * lebar) + C.RESET)
-    print(C.YELLOW + "  Ujian   : " + C.WHITE + ujian_info.get("nama", "-") + C.RESET)
-    print(C.YELLOW + "  Kode    : " + C.WHITE + ujian_info.get("kode", "-") + C.RESET)
-    print(C.YELLOW + "  Siswa   : " + C.WHITE + nama_siswa + C.RESET)
-    print(C.YELLOW + "  Kelas   : " + C.WHITE + kelas_siswa + C.RESET)
-    print(C.CYAN + ("-" * lebar) + C.RESET + "\n")
+def cetak_header_ujian(ujian_info, nama, kelas):
+    print()
+    garis("=")
+    print(C.BOLD + C.WHITE + "  MULAI KOREKSI".center(62) + C.RESET)
+    garis("=")
+    print(C.YELLOW + "  Ujian  : " + C.WHITE + ujian_info.get("nama", "-") + C.RESET)
+    print(C.YELLOW + "  Kode   : " + C.WHITE + ujian_info.get("kode", "-") + C.RESET)
+    print(C.YELLOW + "  Siswa  : " + C.WHITE + nama + C.RESET)
+    print(C.YELLOW + "  Kelas  : " + C.WHITE + kelas + C.RESET)
+    garis("-")
+    print()
 
 def cetak_hasil_soal(nomor, deskripsi, nilai, keterangan=""):
     ikon = (C.GREEN + "[OK]" + C.RESET) if nilai == 1 else (C.RED + "[X] " + C.RESET)
     skor = (C.GREEN + "[1]" + C.RESET) if nilai == 1 else (C.RED + "[0]" + C.RESET)
-    print("  " + ikon + " " + C.BOLD + "Soal " + str(nomor).rjust(2) + C.RESET + " | " + skor + " " + C.WHITE + deskripsi + C.RESET)
+    print("  " + ikon + " " + C.BOLD + "Soal " + str(nomor).rjust(2) + C.RESET +
+          " | " + skor + " " + C.WHITE + deskripsi + C.RESET)
     if keterangan:
         print("             |   " + C.DIM + keterangan + C.RESET)
 
-def cetak_ringkasan(total_benar, total_soal, nama_siswa, kelas_siswa, waktu_selesai):
-    lebar = 60
-    print("\n" + C.CYAN + ("-" * lebar) + C.RESET)
-    print(C.BOLD + C.WHITE + "  RINGKASAN HASIL" + C.RESET)
-    print(C.CYAN + ("-" * lebar) + C.RESET)
-    print("  Nama     : " + C.BOLD + C.WHITE + nama_siswa + C.RESET)
-    print("  Kelas    : " + C.BOLD + C.WHITE + kelas_siswa + C.RESET)
-    warna_skor = C.GREEN if total_benar == total_soal else C.YELLOW
-    print("  Skor     : " + C.BOLD + warna_skor + str(total_benar) + "/" + str(total_soal) + C.RESET)
-    print("  Waktu    : " + C.DIM + waktu_selesai + C.RESET)
-    if total_benar == total_soal:
-        print("\n  " + C.GREEN + C.BOLD + "SELAMAT! Semua soal benar." + C.RESET)
+def cetak_rekap(hasil_soal, nama, kelas, ujian_info, waktu):
+    total       = len(hasil_soal)
+    total_benar = sum(s["nilai"] for s in hasil_soal)
+    salah       = [s for s in hasil_soal if s["nilai"] == 0]
+
+    print()
+    garis("=")
+    print(C.BOLD + C.WHITE + "  REKAP HASIL UJIAN".center(62) + C.RESET)
+    garis("=")
+    print("  Nama   : " + C.BOLD + C.WHITE + nama + C.RESET)
+    print("  Kelas  : " + C.BOLD + C.WHITE + kelas + C.RESET)
+    print("  Ujian  : " + C.WHITE + ujian_info.get("nama", "-") + C.RESET)
+    print("  Waktu  : " + C.DIM + waktu + C.RESET)
+    garis("-")
+    warna_skor = C.GREEN if total_benar == total else C.YELLOW
+    print("  Skor   : " + C.BOLD + warna_skor +
+          str(total_benar) + "/" + str(total) +
+          "  (" + str(round(total_benar/total*100)) + "%)" + C.RESET)
+    if total_benar == total:
+        print("\n  " + C.GREEN + C.BOLD + "SEMPURNA! Semua soal benar." + C.RESET)
     else:
-        kurang = total_soal - total_benar
-        print("\n  " + C.YELLOW + str(kurang) + " soal belum benar." + C.RESET)
-    print(C.CYAN + ("=" * lebar) + C.RESET + "\n")
+        print("\n  " + C.YELLOW + "Soal yang belum benar:" + C.RESET)
+        for s in salah:
+            print("    " + C.RED + "[" + str(s["nomor"]) + "]" + C.RESET +
+                  " " + s["deskripsi"])
+    garis("=")
+    print()
 
-# === INPUT DENGAN VALIDASI ======================================================
-def input_tidak_kosong(prompt, contoh=""):
-    """Input yang tidak boleh kosong."""
+# ============================================================
+# INPUT
+# ============================================================
+def tanya(prompt, contoh=""):
     while True:
-        if contoh:
-            teks = input(C.YELLOW + prompt + C.RESET + C.DIM + " (" + contoh + ")" + C.RESET + ": ").strip()
-        else:
-            teks = input(C.YELLOW + prompt + C.RESET + ": ").strip()
-        if teks:
-            return teks
-        print(C.RED + "  Tidak boleh kosong. Coba lagi." + C.RESET)
+        hint = (" " + C.DIM + "(" + contoh + ")" + C.RESET) if contoh else ""
+        val  = input(C.YELLOW + "  " + prompt + C.RESET + hint + ": ").strip()
+        if val:
+            return val
+        print(C.RED + "  Tidak boleh kosong." + C.RESET)
 
-# === PILIH FILE UJIAN ===========================================================
-def temukan_file_ujian(folder):
-    """
-    Cari semua file .json di folder yang sama dengan skamalearn.py.
-    Kecualikan hasil_ujian.json.
-    Return list of (nama_tampil, path_lengkap)
-    """
-    pola  = os.path.join(folder, "*.json")
-    files = glob.glob(pola)
-    hasil = []
+# ============================================================
+# PILIH FILE UJIAN  (filter ketat: hanya file soal, bukan hasil)
+# ============================================================
+def temukan_file_ujian():
+    files  = glob.glob(os.path.join(FOLDER, "*.json"))
+    pilihan = []
     for f in sorted(files):
-        nama_file = os.path.basename(f)
-        if nama_file.lower() in ("hasil_ujian.json",):
+        nama = os.path.basename(f)
+        # Keluarkan semua file hasil (awalan hasil_) dan file lain yang bukan soal
+        if nama.lower().startswith("hasil_"):
             continue
-        # Coba baca metadata ujian
+        # Coba baca, pastikan punya key "ujian" dan "soal"
         try:
             with open(f, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            nama_ujian = data.get("ujian", {}).get("nama", nama_file)
-            kode_ujian = data.get("ujian", {}).get("kode", "")
-            label = nama_ujian
-            if kode_ujian:
-                label = label + " [" + kode_ujian + "]"
+            if "ujian" not in data or "soal" not in data:
+                continue  # bukan file soal yang valid
+            nama_ujian = data["ujian"].get("nama", nama)
+            kode_ujian = data["ujian"].get("kode", "")
+            label = nama_ujian + (" [" + kode_ujian + "]" if kode_ujian else "")
         except Exception:
-            label = nama_file
-        hasil.append((label, f, nama_file))
-    return hasil
+            continue  # skip file JSON yang rusak/tidak relevan
+        pilihan.append((label, f, nama))
+    return pilihan
 
-def pilih_file_ujian(folder):
-    """Tampilkan daftar file ujian dan minta pilihan dari siswa."""
-    daftar = temukan_file_ujian(folder)
-
+def pilih_file_ujian():
+    daftar = temukan_file_ujian()
     if not daftar:
-        print(C.RED + "\n[ERROR] Tidak ada file ujian (.json) di folder ini." + C.RESET)
-        print(C.DIM + "Pastikan file ujian (misal: basiclinux.json) ada di folder yang sama." + C.RESET)
+        print(C.RED + "\n  [ERROR] Tidak ada file soal (.json) di folder ini." + C.RESET)
+        print(C.DIM  + "  Pastikan file ujian ada di folder yang sama." + C.RESET)
         sys.exit(1)
 
     if len(daftar) == 1:
-        label, path, nama_file = daftar[0]
-        print(C.DIM + "  File ujian ditemukan: " + C.WHITE + label + C.RESET)
+        label, path, _ = daftar[0]
+        print(C.DIM + "  File ujian: " + C.WHITE + label + C.RESET + "\n")
         return path
 
-    # Lebih dari 1 file - tampilkan pilihan
-    print("\n" + C.CYAN + "  Pilih File Ujian:" + C.RESET)
-    print(C.DIM + "  " + ("-" * 50) + C.RESET)
-    for i, (label, path, nama_file) in enumerate(daftar, 1):
+    print(C.CYAN + "\n  Pilih File Ujian:" + C.RESET)
+    garis("-", 50)
+    for i, (label, _, nama_file) in enumerate(daftar, 1):
         print("  " + C.BOLD + C.WHITE + "[" + str(i) + "]" + C.RESET +
               "  " + C.WHITE + label + C.RESET +
               C.DIM + "  (" + nama_file + ")" + C.RESET)
-    print(C.DIM + "  " + ("-" * 50) + C.RESET)
-
+    garis("-", 50)
     while True:
         try:
-            pilihan = input(C.YELLOW + "  Masukkan nomor ujian" + C.RESET + " [1-" + str(len(daftar)) + "]: ").strip()
-            idx = int(pilihan) - 1
+            pil = input(C.YELLOW + "  Nomor ujian" + C.RESET +
+                        " [1-" + str(len(daftar)) + "]: ").strip()
+            idx = int(pil) - 1
             if 0 <= idx < len(daftar):
-                label, path, nama_file = daftar[idx]
+                label, path, _ = daftar[idx]
                 print(C.GREEN + "  Dipilih: " + label + C.RESET + "\n")
                 return path
-            else:
-                print(C.RED + "  Pilihan tidak valid." + C.RESET)
+            print(C.RED + "  Pilihan tidak valid." + C.RESET)
         except (ValueError, KeyboardInterrupt):
-            print(C.RED + "  Masukkan angka yang valid." + C.RESET)
+            print(C.RED + "  Masukkan angka." + C.RESET)
 
-# === PEMERIKSA SOAL =============================================================
-
+# ============================================================
+# PEMERIKSA SOAL
+# ============================================================
 def periksa_hostname(soal):
-    hostname_aktual = socket.gethostname()
-    nilai_expected  = soal.get("nilai_expected", "")
-    pola            = soal.get("pola", "")
-    if pola:
-        cocok = bool(re.fullmatch(pola, hostname_aktual))
-    else:
-        cocok = hostname_aktual.strip().lower() == nilai_expected.strip().lower()
-    return (1 if cocok else 0), "hostname: " + hostname_aktual
+    h  = socket.gethostname()
+    ex = soal.get("nilai_expected", "")
+    po = soal.get("pola", "")
+    ok = bool(re.fullmatch(po, h)) if po else h.strip().lower() == ex.strip().lower()
+    return (1 if ok else 0), "hostname: " + h
 
 def periksa_direktori_ada(soal):
-    path = soal.get("path", "")
-    ada  = os.path.isdir(path)
-    return (1 if ada else 0), ("ditemukan: " + path) if ada else ("tidak ada: " + path)
+    p  = soal.get("path", "")
+    ok = os.path.isdir(p)
+    return (1 if ok else 0), ("ada: " + p) if ok else ("tidak ada: " + p)
 
 def periksa_file_ada(soal):
-    path = soal.get("path", "")
-    ada  = os.path.isfile(path)
-    return (1 if ada else 0), ("ditemukan: " + path) if ada else ("tidak ada: " + path)
+    p  = soal.get("path", "")
+    ok = os.path.isfile(p)
+    return (1 if ok else 0), ("ada: " + p) if ok else ("tidak ada: " + p)
 
 def periksa_timezone(soal):
-    nilai_expected = soal.get("nilai_expected", "")
-    tz_aktual = ""
+    ex = soal.get("nilai_expected", "")
+    tz = ""
     try:
-        result = subprocess.run(
-            ["timedatectl", "show", "--property=Timezone", "--value"],
-            capture_output=True, text=True, timeout=5
-        )
-        tz_aktual = result.stdout.strip()
+        r  = subprocess.run(["timedatectl", "show", "--property=Timezone", "--value"],
+                            capture_output=True, text=True, timeout=5)
+        tz = r.stdout.strip()
     except Exception:
         pass
-    if not tz_aktual:
+    if not tz:
         try:
-            tz_aktual = Path("/etc/timezone").read_text().strip()
+            tz = Path("/etc/timezone").read_text().strip()
         except Exception:
-            tz_aktual = ""
-    cocok = tz_aktual.lower() == nilai_expected.strip().lower()
-    return (1 if cocok else 0), "timezone: " + (tz_aktual or "(tidak terbaca)")
+            tz = ""
+    ok = tz.lower() == ex.strip().lower()
+    return (1 if ok else 0), "timezone: " + (tz or "(tidak terbaca)")
 
 def periksa_isi_file(soal):
-    path  = soal.get("path", "")
-    pola  = soal.get("pola", "")
-    nilai = soal.get("nilai_expected", "")
-    if not os.path.isfile(path):
-        return 0, "file tidak ditemukan: " + path
+    p   = soal.get("path", "")
+    po  = soal.get("pola", "")
+    ex  = soal.get("nilai_expected", "")
+    if not os.path.isfile(p):
+        return 0, "file tidak ada: " + p
     try:
-        isi = Path(path).read_text(encoding="utf-8", errors="replace")
+        isi = Path(p).read_text(encoding="utf-8", errors="replace")
     except Exception as e:
-        return 0, "error baca file: " + str(e)
-    if pola:
-        cocok = bool(re.search(pola, isi, re.MULTILINE | re.IGNORECASE))
-        ket   = ("pola ditemukan" if cocok else "pola tidak cocok") + " (" + pola + ")"
+        return 0, "error: " + str(e)
+    if po:
+        ok  = bool(re.search(po, isi, re.MULTILINE | re.IGNORECASE))
+        ket = ("pola cocok" if ok else "pola tidak cocok") + " (" + po + ")"
     else:
-        cocok = nilai.strip() in isi
-        ket   = ("nilai ditemukan" if cocok else "nilai tidak ditemukan")
-    return (1 if cocok else 0), ket
+        ok  = ex.strip() in isi
+        ket = "nilai " + ("ditemukan" if ok else "tidak ditemukan")
+    return (1 if ok else 0), ket
 
 def periksa_service_aktif(soal):
-    """Cek apakah systemd service aktif/running."""
-    service = soal.get("service", "")
-    if not service:
-        return 0, "nama service tidak didefinisikan"
+    svc = soal.get("service", "")
+    if not svc:
+        return 0, "nama service tidak ada"
     try:
-        result = subprocess.run(
-            ["systemctl", "is-active", service],
-            capture_output=True, text=True, timeout=5
-        )
-        status = result.stdout.strip()
-        cocok  = status == "active"
-        return (1 if cocok else 0), "service " + service + ": " + status
+        r   = subprocess.run(["systemctl", "is-active", svc],
+                             capture_output=True, text=True, timeout=5)
+        st  = r.stdout.strip()
+        ok  = st == "active"
+        return (1 if ok else 0), svc + ": " + st
     except Exception as e:
-        return 0, "error cek service: " + str(e)
+        return 0, "error: " + str(e)
 
 def periksa_service_enabled(soal):
-    """Cek apakah systemd service enabled (auto-start)."""
-    service = soal.get("service", "")
-    if not service:
-        return 0, "nama service tidak didefinisikan"
+    svc = soal.get("service", "")
+    if not svc:
+        return 0, "nama service tidak ada"
     try:
-        result = subprocess.run(
-            ["systemctl", "is-enabled", service],
-            capture_output=True, text=True, timeout=5
-        )
-        status = result.stdout.strip()
-        cocok  = status in ("enabled", "static")
-        return (1 if cocok else 0), "service " + service + " enabled: " + status
+        r   = subprocess.run(["systemctl", "is-enabled", svc],
+                             capture_output=True, text=True, timeout=5)
+        st  = r.stdout.strip()
+        ok  = st in ("enabled", "static")
+        return (1 if ok else 0), svc + " enabled: " + st
     except Exception as e:
-        return 0, "error cek service: " + str(e)
+        return 0, "error: " + str(e)
 
 def periksa_paket_terinstall(soal):
-    """Cek apakah paket Debian sudah terinstall via dpkg."""
-    paket = soal.get("paket", "")
-    if not paket:
-        return 0, "nama paket tidak didefinisikan"
+    pkg = soal.get("paket", "")
+    if not pkg:
+        return 0, "nama paket tidak ada"
     try:
-        result = subprocess.run(
-            ["dpkg", "-l", paket],
-            capture_output=True, text=True, timeout=10
-        )
-        # dpkg -l mengeluarkan "ii" di kolom pertama jika installed
-        terinstall = any(
-            line.startswith("ii") and paket in line
-            for line in result.stdout.splitlines()
-        )
-        ket = "paket " + paket + (" terinstall" if terinstall else " tidak terinstall")
-        return (1 if terinstall else 0), ket
+        r   = subprocess.run(["dpkg", "-l", pkg],
+                             capture_output=True, text=True, timeout=10)
+        ok  = any(l.startswith("ii") and pkg in l for l in r.stdout.splitlines())
+        return (1 if ok else 0), pkg + (" terinstall" if ok else " tidak terinstall")
     except Exception as e:
-        return 0, "error cek paket: " + str(e)
+        return 0, "error: " + str(e)
 
 def periksa_port_listen(soal):
-    """Cek apakah port tertentu sedang listen (menggunakan ss atau netstat)."""
     port = str(soal.get("port", ""))
     if not port:
-        return 0, "port tidak didefinisikan"
+        return 0, "port tidak ada"
     try:
-        result = subprocess.run(
-            ["ss", "-tlnp"],
-            capture_output=True, text=True, timeout=5
-        )
-        output = result.stdout
+        r   = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=5)
+        out = r.stdout
     except Exception:
         try:
-            result = subprocess.run(
-                ["netstat", "-tlnp"],
-                capture_output=True, text=True, timeout=5
-            )
-            output = result.stdout
+            r   = subprocess.run(["netstat", "-tlnp"], capture_output=True, text=True, timeout=5)
+            out = r.stdout
         except Exception as e:
-            return 0, "error cek port: " + str(e)
-    cocok = (":" + port + " ") in output or (":" + port + "\t") in output
-    return (1 if cocok else 0), "port " + port + (" terbuka" if cocok else " tidak terbuka")
+            return 0, "error: " + str(e)
+    ok = (":" + port + " ") in out or (":" + port + "\t") in out
+    return (1 if ok else 0), "port " + port + (" terbuka" if ok else " tidak terbuka")
 
 def periksa_perintah(soal):
-    """
-    Jalankan perintah shell dan cocokkan output-nya.
-    soal: { "perintah": "...", "pola": "..." atau "nilai_expected": "..." }
-    """
-    perintah = soal.get("perintah", "")
-    pola     = soal.get("pola", "")
-    nilai    = soal.get("nilai_expected", "")
-    if not perintah:
-        return 0, "perintah tidak didefinisikan"
+    cmd = soal.get("perintah", "")
+    po  = soal.get("pola", "")
+    ex  = soal.get("nilai_expected", "")
+    if not cmd:
+        return 0, "perintah tidak ada"
     try:
-        result = subprocess.run(
-            perintah, shell=True, capture_output=True,
-            text=True, timeout=10
-        )
-        output = (result.stdout + result.stderr).strip()
+        r   = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        out = (r.stdout + r.stderr).strip()
     except Exception as e:
-        return 0, "error jalankan perintah: " + str(e)
-    if pola:
-        cocok = bool(re.search(pola, output, re.MULTILINE | re.IGNORECASE))
-        ket   = ("output cocok" if cocok else "output tidak cocok") + " | " + output[:60]
+        return 0, "error: " + str(e)
+    if po:
+        ok  = bool(re.search(po, out, re.MULTILINE | re.IGNORECASE))
+        ket = ("cocok" if ok else "tidak cocok") + " | " + out[:70]
     else:
-        cocok = nilai.strip().lower() in output.lower()
-        ket   = ("ditemukan" if cocok else "tidak ditemukan") + " | " + output[:60]
-    return (1 if cocok else 0), ket
+        ok  = ex.strip().lower() in out.lower()
+        ket = ("ditemukan" if ok else "tidak ditemukan") + " | " + out[:70]
+    return (1 if ok else 0), ket
 
-# Registry - tambah tipe baru di sini
 PEMERIKSA = {
-    "hostname":          periksa_hostname,
-    "direktori_ada":     periksa_direktori_ada,
-    "file_ada":          periksa_file_ada,
-    "timezone":          periksa_timezone,
-    "isi_file":          periksa_isi_file,
-    "service_aktif":     periksa_service_aktif,
-    "service_enabled":   periksa_service_enabled,
-    "paket_terinstall":  periksa_paket_terinstall,
-    "port_listen":       periksa_port_listen,
-    "perintah":          periksa_perintah,
+    "hostname":         periksa_hostname,
+    "direktori_ada":    periksa_direktori_ada,
+    "file_ada":         periksa_file_ada,
+    "timezone":         periksa_timezone,
+    "isi_file":         periksa_isi_file,
+    "service_aktif":    periksa_service_aktif,
+    "service_enabled":  periksa_service_enabled,
+    "paket_terinstall": periksa_paket_terinstall,
+    "port_listen":      periksa_port_listen,
+    "perintah":         periksa_perintah,
 }
 
-# === MAIN =======================================================================
-def main():
-    FOLDER = os.path.dirname(os.path.abspath(__file__))
+# ============================================================
+# MINI SERVER (embedded -- tidak perlu skamaserver.py terpisah)
+# ============================================================
+_hasil_path_global = None   # diset setelah hasil disimpan
+_httpd_instance    = None
 
-    # 1. Header awal
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+class HasilHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass  # silent
+
+    def kirim_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.rstrip("/")
+
+        if path in ("", "/status"):
+            ada = _hasil_path_global and os.path.isfile(_hasil_path_global)
+            self.kirim_json({
+                "status":       "ok",
+                "hostname":     socket.gethostname(),
+                "waktu_server": datetime.datetime.now().isoformat(),
+                "ada_hasil":    bool(ada),
+                "file_hasil":   [os.path.basename(_hasil_path_global)] if ada else [],
+            })
+
+        elif path in ("/hasil", "/semua"):
+            if not _hasil_path_global or not os.path.isfile(_hasil_path_global):
+                self.kirim_json({"error": "Hasil belum tersedia."}, 404)
+                return
+            try:
+                with open(_hasil_path_global, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # /semua mengembalikan array (kompatibel skamaguru)
+                payload = [data] if path == "/semua" else data
+                self.kirim_json(payload)
+            except Exception as e:
+                self.kirim_json({"error": str(e)}, 500)
+
+        else:
+            self.kirim_json({"error": "Endpoint tidak dikenal."}, 404)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+def jalankan_server():
+    global _httpd_instance
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        _httpd_instance = socketserver.TCPServer(("", SERVER_PORT), HasilHandler)
+        _httpd_instance.serve_forever()
+    except Exception:
+        pass
+
+def hentikan_server():
+    global _httpd_instance
+    if _httpd_instance:
+        try:
+            _httpd_instance.shutdown()
+        except Exception:
+            pass
+
+# ============================================================
+# CLEANUP: hapus file hasil saat Ctrl+C / exit
+# ============================================================
+_file_untuk_dihapus = []
+
+def cleanup():
+    for f in _file_untuk_dihapus:
+        try:
+            if os.path.isfile(f):
+                os.remove(f)
+                print("\n" + C.DIM + "  File hasil dihapus: " + f + C.RESET)
+        except Exception:
+            pass
+    hentikan_server()
+
+atexit.register(cleanup)
+
+def handle_sigint(sig, frame):
+    print("\n\n" + C.YELLOW + "  Sesi ujian diakhiri." + C.RESET)
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, handle_sigint)
+
+# ============================================================
+# MAIN
+# ============================================================
+def main():
+    global _hasil_path_global
+
     cetak_header_utama()
 
-    # 2. Input nama dan kelas siswa
-    print(C.CYAN + "  Data Siswa" + C.RESET)
-    print(C.DIM + "  " + ("-" * 40) + C.RESET)
-    nama_siswa  = input_tidak_kosong("  Nama Lengkap", "contoh: Budi Santoso")
-    kelas_siswa = input_tidak_kosong("  Kelas       ", "contoh: XI TKJ 1")
+    # 1. Input identitas
+    print(C.CYAN + "  Identitas Siswa" + C.RESET)
+    garis("-", 44)
+    nama  = tanya("Nama Lengkap", "Budi Santoso")
+    kelas = tanya("Kelas       ", "XI TKJ 1")
     print()
 
-    # 3. Pilih file ujian
-    soal_path = pilih_file_ujian(FOLDER)
+    # 2. Pilih file soal (hasil_*.json otomatis disaring)
+    soal_path = pilih_file_ujian()
 
-    # 4. Baca file ujian
+    # 3. Baca soal
     try:
         with open(soal_path, "r", encoding="utf-8") as f:
             config = json.load(f)
     except Exception as e:
-        print(C.RED + "[ERROR] Gagal membaca file ujian: " + str(e) + C.RESET)
+        print(C.RED + "  [ERROR] Gagal baca soal: " + str(e) + C.RESET)
         sys.exit(1)
 
     ujian_info  = config.get("ujian", {})
     daftar_soal = config.get("soal", [])
-    output_cfg  = config.get("output", {})
 
-    # 5. Tentukan path hasil
-    # Nama file hasil: hasil_<kode_ujian>.json agar tidak tertimpa antar ujian
-    kode_ujian = ujian_info.get("kode", "ujian").replace(" ", "_").lower()
-    default_hasil = "hasil_" + kode_ujian + ".json"
-    hasil_nama = output_cfg.get("path", default_hasil)
-    if not os.path.isabs(hasil_nama):
-        hasil_path = os.path.join(FOLDER, hasil_nama)
-    else:
-        hasil_path = hasil_nama
+    # 4. Tentukan path hasil (di folder yang sama, awalan hasil_)
+    kode_ujian  = ujian_info.get("kode", "ujian").replace(" ", "_").lower()
+    hasil_path  = os.path.join(FOLDER, "hasil_" + kode_ujian + ".json")
+    _hasil_path_global = hasil_path
+    _file_untuk_dihapus.append(hasil_path)
 
-    # 6. Header ujian
-    cetak_header_ujian(ujian_info, nama_siswa, kelas_siswa)
+    # 5. Koreksi
+    cetak_header_ujian(ujian_info, nama, kelas)
 
-    # 7. Periksa setiap soal
     waktu_mulai = datetime.datetime.now()
     hasil_soal  = []
     total_benar = 0
@@ -371,40 +456,33 @@ def main():
     for soal in daftar_soal:
         nomor     = soal.get("nomor", "?")
         tipe      = soal.get("tipe", "")
-        deskripsi = soal.get("deskripsi", "(tanpa deskripsi)")
-
-        pemeriksa_fn = PEMERIKSA.get(tipe)
-        if pemeriksa_fn is None:
-            print(C.YELLOW + "  [?] Soal " + str(nomor) + " - tipe tidak dikenal: " + tipe + C.RESET)
+        deskripsi = soal.get("deskripsi", "")
+        fn        = PEMERIKSA.get(tipe)
+        if fn is None:
             nilai, ket = 0, "tipe tidak dikenal: " + tipe
+            print(C.YELLOW + "  [?] Soal " + str(nomor) + " - " + ket + C.RESET)
         else:
             try:
-                nilai, ket = pemeriksa_fn(soal)
+                nilai, ket = fn(soal)
             except Exception as e:
                 nilai, ket = 0, "error: " + str(e)
-
         total_benar += nilai
         cetak_hasil_soal(nomor, deskripsi, nilai, ket)
-        hasil_soal.append({
-            "nomor":      nomor,
-            "tipe":       tipe,
-            "deskripsi":  deskripsi,
-            "nilai":      nilai,
-            "keterangan": ket,
-        })
+        hasil_soal.append({"nomor": nomor, "tipe": tipe,
+                           "deskripsi": deskripsi, "nilai": nilai, "keterangan": ket})
 
     waktu_selesai = datetime.datetime.now()
+    waktu_str     = waktu_selesai.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 8. Ringkasan
-    cetak_ringkasan(total_benar, len(daftar_soal), nama_siswa, kelas_siswa,
-                    waktu_selesai.strftime("%Y-%m-%d %H:%M:%S"))
+    # 6. Rekap
+    cetak_rekap(hasil_soal, nama, kelas, ujian_info, waktu_str)
 
-    # 9. Simpan hasil
-    output_data = {
+    # 7. Simpan hasil
+    output = {
         "ujian":         ujian_info,
         "file_ujian":    os.path.basename(soal_path),
-        "nama_siswa":    nama_siswa,
-        "kelas":         kelas_siswa,
+        "nama_siswa":    nama,
+        "kelas":         kelas,
         "hostname":      socket.gethostname(),
         "waktu_mulai":   waktu_mulai.isoformat(),
         "waktu_selesai": waktu_selesai.isoformat(),
@@ -412,14 +490,31 @@ def main():
         "total_benar":   total_benar,
         "detail":        hasil_soal,
     }
-
-    dir_hasil = os.path.dirname(hasil_path)
-    if dir_hasil:
-        os.makedirs(dir_hasil, exist_ok=True)
     with open(hasil_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=2)
+        json.dump(output, f, ensure_ascii=False, indent=2)
 
-    print(C.DIM + "Hasil disimpan ke: " + hasil_path + C.RESET + "\n")
+    # 8. Jalankan server di background
+    ip_lokal = get_local_ip()
+    print(C.CYAN + "=" * 62 + C.RESET)
+    print(C.BOLD + C.WHITE + "  SERVER AKTIF -- Guru dapat mengambil nilai sekarang".center(62) + C.RESET)
+    print(C.CYAN + "=" * 62 + C.RESET)
+    print(C.GREEN + "  IP Address  : " + C.BOLD + ip_lokal + C.RESET)
+    print(C.GREEN + "  Port        : " + C.BOLD + str(SERVER_PORT) + C.RESET)
+    print(C.DIM   + "\n  Beritahu guru IP ini. Nilai akan otomatis terkirim." + C.RESET)
+    print(C.YELLOW + "\n  Tekan Ctrl+C untuk mengakhiri sesi dan menghapus data." + C.RESET)
+    print(C.CYAN + "=" * 62 + C.RESET + "\n")
+
+    t = threading.Thread(target=jalankan_server, daemon=True)
+    t.start()
+
+    # 9. Tunggu Ctrl+C
+    try:
+        signal.pause()   # Linux
+    except AttributeError:
+        # Windows tidak punya signal.pause
+        import time
+        while True:
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
